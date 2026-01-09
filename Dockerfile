@@ -32,10 +32,12 @@ RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
 # Copy application files
-COPY streamlit_app.py .
+COPY app.py .
 COPY topic_modeling.py .
+COPY text_preprocessor.py .
 COPY gini_calculator.py .
 COPY topic_evolution.py .
+COPY narrative_similarity.py .
 COPY sample_data.csv .
 
 # Create a non-root user
@@ -49,5 +51,5 @@ EXPOSE 8501
 HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health
 
 # Run the application
-CMD ["streamlit", "run", "streamlit_app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
 

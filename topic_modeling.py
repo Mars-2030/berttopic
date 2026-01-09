@@ -1,12 +1,13 @@
 # topic_modeling.py
 
+import random
 import pandas as pd
 from bertopic import BERTopic
 from gensim.corpora import Dictionary
 from gensim.models import CoherenceModel
 from nltk.tokenize import word_tokenize
 from typing import List
-from sklearn.feature_extraction.text import CountVectorizer # <-- Make sure this is imported
+from sklearn.feature_extraction.text import CountVectorizer
 
 def perform_topic_modeling(
     docs: List[str],
@@ -55,8 +56,14 @@ def perform_topic_modeling(
     topics, probs = topic_model.fit_transform(docs)
 
     # --- Calculate Coherence Score ---
-    # This part remains the same.
-    tokenized_docs = [word_tokenize(doc) for doc in docs]
+    # Sample documents for faster coherence calculation (2000 docs is sufficient for accurate estimate)
+    max_coherence_docs = 2000
+    if len(docs) > max_coherence_docs:
+        sample_docs = random.sample(docs, max_coherence_docs)
+    else:
+        sample_docs = docs
+
+    tokenized_docs = [word_tokenize(doc) for doc in sample_docs]
     dictionary = Dictionary(tokenized_docs)
     corpus = [dictionary.doc2bow(doc) for doc in tokenized_docs]
     topic_words = topic_model.get_topics()

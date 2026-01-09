@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import time
 
 import plotly.express as px
 from wordcloud import WordCloud
@@ -11,7 +12,7 @@ from text_preprocessor import MultilingualPreprocessor
 from topic_modeling import perform_topic_modeling
 from gini_calculator import calculate_gini_per_user, calculate_gini_per_topic
 from topic_evolution import analyze_general_topic_evolution
-from narrative_similarity import calculate_narrative_similarity 
+from narrative_similarity import calculate_narrative_similarity, calculate_text_similarity_tfidf 
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -54,10 +55,13 @@ def create_word_cloud(_topic_model, topic_id):
 
 
 def interpret_gini(gini_score):
+    # Handle NaN or None values
+    if gini_score is None or (isinstance(gini_score, float) and np.isnan(gini_score)):
+        return "N/A"
     # Logic is now FLIPPED for Gini Impurity
-    if gini_score >= 0.6: return "🌐 Diverse Interests"
-    elif gini_score >= 0.3: return "🎯 Moderately Focused"
-    else: return "🔥 Highly Specialized"
+    if gini_score >= 0.6: return "Diverse Interests"
+    elif gini_score >= 0.3: return "Moderately Focused"
+    else: return "Highly Specialized"
 
 # --- START OF DEFINITIVE FIX: Centralized Callback Function ---
 def sync_stopwords():
@@ -106,8 +110,8 @@ if st.session_state.df_raw is not None:
     col1, col2, col3 = st.columns(3)
 
     with col1: user_id_col = st.selectbox("User ID Column", df_raw.columns, index=0, key="user_id_col")
-    with col2: post_content_col = st.selectbox("Post Content Column", df_raw.columns, index=1, key="post_content_col")
-    with col3: timestamp_col = st.selectbox("Timestamp Column", df_raw.columns, index=2, key="timestamp_col")
+    with col2: post_content_col = st.selectbox("Post Content Column", df_raw.columns, index=min(1, len(df_raw.columns)-1), key="post_content_col")
+    with col3: timestamp_col = st.selectbox("Timestamp Column", df_raw.columns, index=min(2, len(df_raw.columns)-1), key="timestamp_col")
     
     st.subheader("Topic Modeling Settings")
     lang_col, topics_col = st.columns(2)
@@ -144,6 +148,26 @@ if st.session_state.df_raw is not None:
         )
         opts['custom_stopwords'] = [s.strip().lower() for s in st.session_state.custom_stopwords_text.split(',') if s]
 
+    st.subheader("User Similarity Analysis")
+    enable_similarity = st.checkbox(
+        "Enable User Similarity Analysis",
+        value=True,
+        help="Find users with similar interests based on topics or text content",
+        key="enable_similarity"
+    )
+
+    if enable_similarity:
+        similarity_method = st.radio(
+            "Similarity Method",
+            options=["Topic-Based", "Text Similarity (TF-IDF)"],
+            index=0,
+            help="Topic-Based: Compare topic distributions. TF-IDF: Compare actual text content.",
+            key="similarity_method",
+            horizontal=True
+        )
+    else:
+        similarity_method = None
+
     st.divider()
     process_button = st.button("🚀 Run Full Analysis", type="primary", use_container_width=True)
 else:
@@ -154,12 +178,21 @@ st.divider()
 # --- Main Processing Logic ---
 if process_button:
     st.session_state.results = None
+    start_time = time.time()
     with st.spinner("Processing your data... This may take a few minutes."):
         try:
             df = df_raw[[user_id_col, post_content_col, timestamp_col]].copy()
             df.columns = ['user_id', 'post_content', 'timestamp']
             df.dropna(subset=['user_id', 'post_content', 'timestamp'], inplace=True)
-            df['timestamp'] = pd.to_datetime(df['timestamp'])
+            try:
+                df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
+                invalid_timestamps = df['timestamp'].isna().sum()
+                if invalid_timestamps > 0:
+                    st.warning(f"Warning: {invalid_timestamps} rows have invalid timestamps and will be excluded.")
+                    df = df.dropna(subset=['timestamp'])
+            except Exception as e:
+                st.error(f"Could not parse timestamp column: {e}")
+                st.stop()
             if opts['handle_hashtags'] == 'Extract Hashtags': df['hashtags'] = df['post_content'].str.findall(r'#\w+')
             if opts['handle_mentions'] == 'Extract Mentions': df['mentions'] = df['post_content'].str.findall(r'@\w+')
             
@@ -176,11 +209,11 @@ if process_button:
             df['processed_content'] = preprocessor.preprocess_series(
                 df['post_content'], 
                 opts_for_preprocessor,
-                n_process_spacy=1 # Keep this for stability
+                n_process_spacy=-1  # Use all CPU cores for faster processing
             )
 
             st.info("🔍 Performing topic modeling...")
-            # FIX 3: Add the +1 logic to better target the number of topics
+            # Add +1 because BERTopic creates an outlier topic (-1), so to get N meaningful topics, request N+1
             if num_topics > 0:
                 bertopic_nr_topics = num_topics + 1
             else:
@@ -218,17 +251,33 @@ if process_button:
             st.info("📈 Analyzing topic evolution...")
             general_evolution = analyze_general_topic_evolution(topic_model, docs_to_model, df_with_content['timestamp'].tolist())
             
+            end_time = time.time()
+            elapsed_time = end_time - start_time
+
+            # Format elapsed time nicely
+            if elapsed_time >= 60:
+                minutes = int(elapsed_time // 60)
+                seconds = elapsed_time % 60
+                time_str = f"{minutes} min {seconds:.1f} sec"
+            else:
+                time_str = f"{elapsed_time:.1f} sec"
+
+            # Cache df_meaningful for reuse (avoids repeated filtering)
+            df_meaningful = df[df['topic_id'] != -1].copy()
+
             st.session_state.results = {
-                'topic_model': topic_model, 
+                'topic_model': topic_model,
                 'topic_info': topic_model.get_topic_info(),
-                'df': df, 
+                'df': df,
+                'df_meaningful': df_meaningful,  # Cached for performance
                 'gini_per_user': gini_per_user,
-                'gini_per_topic': gini_per_topic, # FIX 2: Save gini_per_topic to session state
-                'general_evolution': general_evolution, 
-                'coherence_score': coherence_score
+                'gini_per_topic': gini_per_topic,
+                'general_evolution': general_evolution,
+                'coherence_score': coherence_score,
+                'processing_time': elapsed_time
             }
-            
-            st.success("✅ Analysis complete!")
+
+            st.success(f"✅ Analysis complete! Processing time: {time_str}")
         except OSError as e:
             st.error(f"spaCy Model Error: Could not load model. Please run `python -m spacy download en_core_web_sm` and `python -m spacy download xx_ent_wiki_sm` from your terminal.")
         except Exception as e:
@@ -253,12 +302,21 @@ if st.session_state.results:
     else:
         # If dates span multiple years, show year on both
         time_range_str = f"{start_date.strftime('%b %d, %Y')} - {end_date.strftime('%b %d, %Y')}"
-    col1, col2, col3, col4, col5 = st.columns(5)
+
+    # Format processing time for display
+    proc_time = results.get('processing_time', 0)
+    if proc_time >= 60:
+        proc_time_str = f"{int(proc_time // 60)}m {proc_time % 60:.1f}s"
+    else:
+        proc_time_str = f"{proc_time:.1f}s"
+
+    col1, col2, col3, col4, col5, col6 = st.columns(6)
     col1.metric("Total Posts", len(df))
     col2.metric("Unique Users", num_users)
     col3.metric("Avg Posts / User", f"{avg_posts:.1f}")
-    col4.metric("Time Range", f"{start_date.strftime('%b %d')} - {end_date.strftime('%b %d, %Y')}")
+    col4.metric("Time Range", time_range_str)
     col5.metric("Topic Coherence", score_text)
+    col6.metric("Processing Time", proc_time_str)
     st.markdown("#### Preprocessing Results (Sample)")
     st.dataframe(df[['post_content', 'processed_content']].head())
 
@@ -390,8 +448,8 @@ if st.session_state.results:
 
     # --- START OF THE CRITICAL FIX ---
 
-    # 1. Create a new DataFrame containing ONLY posts from meaningful topics.
-    df_meaningful = df[df['topic_id'] != -1].copy()
+    # 1. Use cached df_meaningful from session_state for performance
+    df_meaningful = results.get('df_meaningful', df[df['topic_id'] != -1])
 
     # 2. Get post counts based on this meaningful data.
     meaningful_post_counts = df_meaningful.groupby('user_id').size().reset_index(name='post_count')
@@ -411,7 +469,8 @@ if st.session_state.results:
     total_meaningful_users = len(user_metrics_df)
     st.info(f"Displaying engagement profile for {len(metrics_to_plot)} users out of {total_meaningful_users} who contributed to meaningful topics.")
 
-    # 5. Add jitter for better visualization (this part is the same as before)
+    # 5. Add jitter for better visualization (deterministic seed for consistency)
+    np.random.seed(42)
     jitter_strength = 0.02
     metrics_to_plot['gini_jittered'] = metrics_to_plot['gini_coefficient'] + \
                                         np.random.uniform(-jitter_strength, jitter_strength, size=len(metrics_to_plot))
@@ -442,12 +501,18 @@ if st.session_state.results:
 
     if selected_user:
         user_df = df[df['user_id'] == selected_user]
-        user_gini_info = user_metrics_df[user_metrics_df['user_id'] == selected_user].iloc[0]
-        
-        # Display the top-level metrics for the user first
-        c1, c2 = st.columns(2)
-        with c1: st.metric("Total Posts by User", len(user_df))
-        with c2: st.metric("Topic Diversity (Gini)", f"{user_gini_info['gini_coefficient']:.3f}", help=interpret_gini(user_gini_info['gini_coefficient']))
+        matching_users = user_metrics_df[user_metrics_df['user_id'] == selected_user]
+
+        if matching_users.empty:
+            st.warning("This user has no posts in meaningful topics (all posts were classified as outliers).")
+            st.metric("Total Posts by User", len(user_df))
+        else:
+            user_gini_info = matching_users.iloc[0]
+
+            # Display the top-level metrics for the user first
+            c1, c2 = st.columns(2)
+            with c1: st.metric("Total Posts by User", len(user_df))
+            with c2: st.metric("Topic Diversity (Gini)", f"{user_gini_info['gini_coefficient']:.3f}", help=interpret_gini(user_gini_info['gini_coefficient']))
         
         st.markdown("---") # Add a visual separator
 
@@ -531,4 +596,66 @@ if st.session_state.results:
             st.write("Data Table: User Distribution")
             st.dataframe(post_distribution, use_container_width=True)
 
-      
+    # --- User Similarity Analysis Section ---
+    # Check if similarity analysis is enabled
+    if st.session_state.get('enable_similarity', True):
+        st.markdown('<h2 class="sub-header">🤝 User Similarity Analysis</h2>', unsafe_allow_html=True)
+
+        # Get the selected method
+        selected_method = st.session_state.get('similarity_method', 'Topic-Based')
+
+        if selected_method == "Topic-Based":
+            st.info("Finding users with similar **topic interests** based on their topic distributions.")
+            df_for_similarity = results.get('df_meaningful', df[df['topic_id'] != -1])
+            similarity_df = calculate_narrative_similarity(df_for_similarity)
+        else:  # TF-IDF
+            st.info("Finding users with similar **text content** using TF-IDF word analysis.")
+            with st.spinner("Calculating text similarity (this may take a moment)..."):
+                similarity_df = calculate_text_similarity_tfidf(df)
+
+        if similarity_df.empty:
+            st.warning("Not enough data to calculate similarity. Need at least 2 users with content.")
+        else:
+            # User selection for similarity analysis
+            similarity_user = st.selectbox(
+                "Select a User to Find Similar Users",
+                options=sorted(similarity_df.index.tolist()),
+                key="similarity_user_dropdown"
+            )
+
+            # Similarity threshold slider
+            similarity_threshold = st.slider(
+                "Similarity Threshold",
+                min_value=0.0,
+                max_value=1.0,
+                value=0.5,
+                step=0.05,
+                help="Only show users with similarity score above this threshold"
+            )
+
+            if similarity_user:
+                # Get similarity scores for the selected user
+                user_similarities = similarity_df[similarity_user].drop(similarity_user)  # Exclude self
+
+                # Filter by threshold
+                similar_users = user_similarities[user_similarities >= similarity_threshold].sort_values(ascending=False)
+
+                if similar_users.empty:
+                    st.info(f"No users found with similarity >= {similarity_threshold}. Try lowering the threshold.")
+                else:
+                    # Create a results DataFrame with post counts
+                    similar_users_df = pd.DataFrame({
+                        'User ID': similar_users.index,
+                        'Similarity Score': similar_users.values
+                    })
+
+                    # Add post count for context
+                    post_counts = df.groupby('user_id').size()
+                    similar_users_df['Post Count'] = similar_users_df['User ID'].map(post_counts).fillna(0).astype(int)
+
+                    # Format the similarity score
+                    similar_users_df['Similarity Score'] = similar_users_df['Similarity Score'].apply(lambda x: f"{x:.3f}")
+
+                    method_label = "topic interests" if selected_method == "Topic-Based" else "text content"
+                    st.write(f"**Found {len(similar_users_df)} users** with similar {method_label} to **{similarity_user}**:")
+                    st.dataframe(similar_users_df, use_container_width=True, hide_index=True)

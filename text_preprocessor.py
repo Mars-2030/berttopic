@@ -6,6 +6,10 @@ import emoji
 from spacy.lang.char_classes import ALPHA, ALPHA_LOWER, ALPHA_UPPER
 from spacy.lang.char_classes import CONCAT_QUOTES, LIST_ELLIPSES, LIST_ICONS
 from spacy.util import compile_infix_regex
+from pathlib import Path 
+
+from resource_path import resource_path
+
 
 class MultilingualPreprocessor:
     """
@@ -14,21 +18,32 @@ class MultilingualPreprocessor:
     def __init__(self, language: str):
         """
         Initializes the preprocessor and loads the appropriate spaCy model.
-        
+
         Args:
             language (str): 'english' or 'multilingual'.
         """
+        import sys
+
         model_map = {
             'english': 'en_core_web_sm',
             'multilingual': 'xx_ent_wiki_sm'
         }
         self.model_name = model_map.get(language, 'xx_ent_wiki_sm')
+
         try:
-            self.nlp = spacy.load(self.model_name)
-        except OSError:
-            print(f"spaCy model '{self.model_name}' not found.")
+            # Check if running from PyInstaller bundle
+            if hasattr(sys, '_MEIPASS'):
+                # PyInstaller mode: load from bundled path
+                model_path_obj = Path(resource_path(self.model_name))
+                self.nlp = spacy.util.load_model_from_path(model_path_obj)
+            else:
+                # Normal development mode: load by model name
+                self.nlp = spacy.load(self.model_name)
+
+        except OSError as e:
+            print(f"spaCy Model Error: Could not load model '{self.model_name}'")
             print(f"Please run: python -m spacy download {self.model_name}")
-            raise  # Re-raise the error to be caught by the Streamlit app
+            raise
 
         # Customize tokenizer to not split on hyphens in words
         # CORRECTED LINE: CONCAT_QUOTES is wrapped in a list []
@@ -47,23 +62,31 @@ class MultilingualPreprocessor:
         Returns:
             pd.Series: The cleaned text Series.
         """
-        # --- Stage 1: Fast, Regex-based cleaning ---
+        # --- Stage 1: Fast, Regex-based cleaning (combined for performance) ---
         processed_text = text_series.copy().astype(str)
-        if options.get("remove_html"):
-            processed_text = processed_text.str.replace(r"<.*?>", "", regex=True)
-        if options.get("remove_urls"):
-            processed_text = processed_text.str.replace(r"http\S+|www\.\S+", "", regex=True)
 
+        # Combine all regex patterns into a single pass for better performance
+        regex_patterns = []
+        if options.get("remove_html"):
+            regex_patterns.append(r"<.*?>")
+        if options.get("remove_urls"):
+            regex_patterns.append(r"http\S+|www\.\S+")
+        if options.get("handle_hashtags") == "Remove Hashtags":
+            regex_patterns.append(r"#\w+")
+        if options.get("handle_mentions") == "Remove Mentions":
+            regex_patterns.append(r"@\w+")
+
+        # Apply all regex replacements in a single pass
+        if regex_patterns:
+            combined_pattern = "|".join(regex_patterns)
+            processed_text = processed_text.str.replace(combined_pattern, "", regex=True)
+
+        # Emoji handling (separate as it needs special library)
         emoji_option = options.get("handle_emojis", "Keep Emojis")
         if emoji_option == "Remove Emojis":
             processed_text = processed_text.apply(lambda s: emoji.replace_emoji(s, replace=''))
         elif emoji_option == "Convert Emojis to Text":
             processed_text = processed_text.apply(emoji.demojize)
-            
-        if options.get("handle_hashtags") == "Remove Hashtags":
-            processed_text = processed_text.str.replace(r"#\w+", "", regex=True)
-        if options.get("handle_mentions") == "Remove Mentions":
-            processed_text = processed_text.str.replace(r"@\w+", "", regex=True)
 
         # --- Stage 2: spaCy-based advanced processing ---
         # Using nlp.pipe for efficiency on a Series

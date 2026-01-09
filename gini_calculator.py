@@ -1,111 +1,3 @@
-# import numpy as np
-# import pandas as pd
-# from typing import List
-
-# def calculate_gini(array):
-#     """
-#     Calculates the Gini coefficient of a numpy array.
-#     Based on: http://www.statsdirect.com/help/default.htm#nonparametric_tests/gini.htm
-#     """
-#     array = np.array(array)
-#     if array.size == 0 or np.all(array == 0): # Check if all elements are zero
-#         return 0.0
-#     array = array.flatten()
-#     if np.amin(array) < 0: # Values cannot be negative: https://en.wikipedia.org/wiki/Gini_coefficient
-#         array -= np.amin(array)
-#     array = np.sort(array)
-#     index = np.arange(1, array.shape[0] + 1)
-#     n = array.shape[0]
-#     if np.sum(array) == 0: # Avoid division by zero for empty arrays or arrays with all zeros
-#         return 0.0
-#     return ((np.sum((2 * index - n - 1) * array)) / (n * np.sum(array)))
-
-# # def calculate_gini_per_user(df: pd.DataFrame):
-# #     """
-# #     Calculates the Gini coefficient for topic distribution per user.
-
-# #     Args:
-# #         df (pd.DataFrame): DataFrame with 'user_id' and 'topic_id' columns.
-
-# #     Returns:
-# #         pd.DataFrame: DataFrame with 'user_id' and 'gini_coefficient'.
-# #     """
-# #     user_gini = []
-# #     for user_id in df["user_id"].unique():
-# #         user_posts = df[df["user_id"] == user_id]
-# #         topic_counts = user_posts["topic_id"].value_counts().values
-# #         gini = calculate_gini(topic_counts)
-# #         user_gini.append({"user_id": user_id, "gini_coefficient": gini})
-# #     return pd.DataFrame(user_gini)
-
-# # def calculate_gini_per_topic(df: pd.DataFrame):
-# #     """
-# #     Calculates the Gini coefficient for topic distribution per topic across users.
-
-# #     Args:
-# #         df (pd.DataFrame): DataFrame with 'user_id' and 'topic_id' columns.
-
-# #     Returns:
-# #         pd.DataFrame: DataFrame with 'topic_id' and 'gini_coefficient'.
-# #     """
-# #     topic_gini = []
-# #     for topic_id in df["topic_id"].unique():
-# #         topic_posts = df[df["topic_id"] == topic_id]
-# #         user_counts = topic_posts["user_id"].value_counts().values
-# #         gini = calculate_gini(user_counts)
-# #         topic_gini.append({"topic_id": topic_id, "gini_coefficient": gini})
-# #     return pd.DataFrame(topic_gini)
-
-# def calculate_gini_per_user(df: pd.DataFrame, all_topics: List[int]):
-#     user_gini = []
-#     for user_id in df["user_id"].unique():
-#         user_posts = df[df["user_id"] == user_id]
-        
-#         # Get counts for topics the user posted in
-#         existing_topic_counts = user_posts["topic_id"].value_counts()
-        
-#         # Create a full series with all topics, filling missing with 0
-#         full_topic_counts = pd.Series(0, index=all_topics)
-#         full_topic_counts.update(existing_topic_counts)
-        
-#         gini = calculate_gini(full_topic_counts.values)
-#         user_gini.append({"user_id": user_id, "gini_coefficient": gini})
-#     return pd.DataFrame(user_gini)
-
-# def calculate_gini_per_topic(df: pd.DataFrame, all_users: List[str]):
-#     topic_gini = []
-#     for topic_id in df["topic_id"].unique(): # Or iterate over all_topics if you want Gini for topics with no posts
-#         topic_posts = df[df["topic_id"] == topic_id]
-        
-#         # Get counts for users who posted in this topic
-#         existing_user_counts = topic_posts["user_id"].value_counts()
-        
-#         # Create a full series with all users, filling missing with 0
-#         full_user_counts = pd.Series(0, index=all_users)
-#         full_user_counts.update(existing_user_counts)
-        
-#         gini = calculate_gini(full_user_counts.values)
-#         topic_gini.append({"topic_id": topic_id, "gini_coefficient": gini})
-#     return pd.DataFrame(topic_gini)
-
-# if __name__ == "__main__":
-#     # Example Usage with more diverse data:
-#     data = {
-#         'user_id': ['userA', 'userA', 'userA', 'userB', 'userB', 'userC', 'userC', 'userC', 'userC', 'userD'],
-#         'topic_id': [1, 1, 2, 1, 3, 2, 2, 3, 4, 1]
-#     }
-#     df = pd.DataFrame(data)
-
-#     print("Calculating Gini per user...")
-#     gini_per_user_df = calculate_gini_per_user(df)
-#     print(gini_per_user_df)
-
-#     print("\nCalculating Gini per topic...")
-#     gini_per_topic_df = calculate_gini_per_topic(df)
-#     print(gini_per_topic_df)
-
-# gini_calculator.py
-
 import pandas as pd
 from math import isnan
 import math
@@ -183,31 +75,33 @@ def calculate_gini_per_user(df: pd.DataFrame, all_topics: List[int]):
     """
     Calculates the Gini Impurity for topic distribution per user.
     A high value indicates high topic diversity.
+    Optimized with groupby for better performance.
     """
-    user_gini = []
-    for user_id in df["user_id"].unique():
-        user_posts = df[df["user_id"] == user_id]
-        existing_topic_counts = user_posts["topic_id"].value_counts()
+    def compute_user_gini(group):
+        existing_topic_counts = group["topic_id"].value_counts()
         full_topic_counts = pd.Series(0, index=all_topics)
         full_topic_counts.update(existing_topic_counts)
-        # We use normalize=True to make scores more comparable
-        gini = calculate_gini(full_topic_counts.values, normalize=True)
-        user_gini.append({"user_id": user_id, "gini_coefficient": gini})
-    # The new function returns NaN for zero counts, so we fill with 0
-    return pd.DataFrame(user_gini).fillna(0)
+        return calculate_gini(full_topic_counts.values, normalize=True)
+
+    # Use groupby instead of loop for O(n) instead of O(n*m) complexity
+    user_gini = df.groupby("user_id").apply(compute_user_gini).reset_index()
+    user_gini.columns = ["user_id", "gini_coefficient"]
+    return user_gini.fillna(0)
 
 
 def calculate_gini_per_topic(df: pd.DataFrame, all_users: List[str]):
     """
     Calculates the Gini Impurity for user distribution per topic.
     A high value indicates the topic is discussed by a diverse set of users.
+    Optimized with groupby for better performance.
     """
-    topic_gini = []
-    for topic_id in df["topic_id"].unique():
-        topic_posts = df[df["topic_id"] == topic_id]
-        existing_user_counts = topic_posts["user_id"].value_counts()
+    def compute_topic_gini(group):
+        existing_user_counts = group["user_id"].value_counts()
         full_user_counts = pd.Series(0, index=all_users)
         full_user_counts.update(existing_user_counts)
-        gini = calculate_gini(full_user_counts.values, normalize=True)
-        topic_gini.append({"topic_id": topic_id, "gini_coefficient": gini})
-    return pd.DataFrame(topic_gini).fillna(0)
+        return calculate_gini(full_user_counts.values, normalize=True)
+
+    # Use groupby instead of loop for O(n) instead of O(n*m) complexity
+    topic_gini = df.groupby("topic_id").apply(compute_topic_gini).reset_index()
+    topic_gini.columns = ["topic_id", "gini_coefficient"]
+    return topic_gini.fillna(0)
