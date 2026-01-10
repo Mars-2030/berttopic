@@ -1,30 +1,29 @@
-# Use Python 3.11 slim image as base
-FROM python:3.11-slim
+# Use Python base image (avoid slim on HF)
+FROM python:3.11
 
 # Set working directory
 WORKDIR /app
 
-# Set environment variables
+# Environment variables (use port 7860 for HF Spaces)
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    STREAMLIT_SERVER_PORT=8501 \
+    STREAMLIT_SERVER_PORT=7860 \
     STREAMLIT_SERVER_ADDRESS=0.0.0.0 \
     STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
     STREAMLIT_SERVER_HEADLESS=true
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+# Install system dependencies (HF-safe)
+RUN apt-get update --fix-missing && \
+    apt-get install -y --no-install-recommends \
     build-essential \
     curl \
-    software-properties-common \
     git \
-    fonts-dejavu-core \
-    fonts-liberation \
     fontconfig \
-    && fc-cache -fv \
-    && rm -rf /var/lib/apt/lists/*
+    fonts-dejavu-core && \
+    fc-cache -f && \
+    rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for better caching
+# Copy requirements first (better cache)
 COPY requirements.txt .
 
 # Install Python dependencies
@@ -38,18 +37,21 @@ COPY text_preprocessor.py .
 COPY gini_calculator.py .
 COPY topic_evolution.py .
 COPY narrative_similarity.py .
+COPY resource_path.py .
 COPY sample_data.csv .
 
-# Create a non-root user
-RUN useradd --create-home --shell /bin/bash app
-USER app
+# Copy Streamlit config (fixes 403 upload error)
+COPY .streamlit/config.toml .streamlit/config.toml
 
-# Expose port
-EXPOSE 8501
+# Create non-root user (HF compatible)
+RUN useradd -m appuser
+USER appuser
+
+# Expose Streamlit port (7860 for HF Spaces)
+EXPOSE 7860
 
 # Health check
-HEALTHCHECK CMD curl --fail http://localhost:8501/_stcore/health
+HEALTHCHECK CMD curl --fail http://localhost:7860/_stcore/health || exit 1
 
-# Run the application
-CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
-
+# Run Streamlit
+CMD ["streamlit", "run", "app.py", "--server.port=7860", "--server.address=0.0.0.0"]
