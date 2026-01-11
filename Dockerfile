@@ -30,6 +30,13 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
+# Download spaCy models (required for text preprocessing)
+RUN python -m spacy download en_core_web_sm && \
+    python -m spacy download xx_ent_wiki_sm
+
+# Download NLTK data (required for coherence calculation)
+RUN python -c "import nltk; nltk.download('punkt'); nltk.download('punkt_tab')"
+
 # Copy application files
 COPY app.py .
 COPY topic_modeling.py .
