@@ -4,13 +4,15 @@ FROM python:3.11
 # Set working directory
 WORKDIR /app
 
-# Environment variables (use port 7860 for HF Spaces)
+# Environment variables (use port 8501 for Streamlit on HF Spaces)
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    STREAMLIT_SERVER_PORT=7860 \
+    STREAMLIT_SERVER_PORT=8501 \
     STREAMLIT_SERVER_ADDRESS=0.0.0.0 \
     STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
-    STREAMLIT_SERVER_HEADLESS=true
+    STREAMLIT_SERVER_HEADLESS=true \
+    STREAMLIT_SERVER_FILE_WATCHER_TYPE=none \
+    STREAMLIT_SERVER_RUN_ON_SAVE=false
 
 # Install system dependencies (HF-safe)
 RUN apt-get update --fix-missing && \
@@ -54,11 +56,8 @@ COPY .streamlit/config.toml .streamlit/config.toml
 RUN useradd -m appuser
 USER appuser
 
-# Expose Streamlit port (7860 for HF Spaces)
-EXPOSE 7860
+# Expose Streamlit default port
+EXPOSE 8501
 
-# Health check
-HEALTHCHECK CMD curl --fail http://localhost:7860/_stcore/health || exit 1
-
-# Run Streamlit
-CMD ["streamlit", "run", "app.py", "--server.port=7860", "--server.address=0.0.0.0"]
+# Run Streamlit (disable file watcher to prevent restart loops)
+CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.fileWatcherType=none"]
