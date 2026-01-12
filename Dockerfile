@@ -12,7 +12,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     STREAMLIT_BROWSER_GATHER_USAGE_STATS=false \
     STREAMLIT_SERVER_HEADLESS=true \
     STREAMLIT_SERVER_FILE_WATCHER_TYPE=none \
-    STREAMLIT_SERVER_RUN_ON_SAVE=false
+    STREAMLIT_SERVER_RUN_ON_SAVE=false \
+    NLTK_DATA=/usr/share/nltk_data
 
 # Install system dependencies (HF-safe)
 RUN apt-get update --fix-missing && \
@@ -36,8 +37,10 @@ RUN pip install --no-cache-dir --upgrade pip && \
 RUN python -m spacy download en_core_web_sm && \
     python -m spacy download xx_ent_wiki_sm
 
-# Download NLTK data (required for coherence calculation)
-RUN python -c "import nltk; nltk.download('punkt'); nltk.download('punkt_tab')"
+# Download NLTK data to shared location (accessible by appuser)
+RUN mkdir -p /usr/share/nltk_data && \
+    python -c "import nltk; nltk.download('punkt', download_dir='/usr/share/nltk_data'); nltk.download('punkt_tab', download_dir='/usr/share/nltk_data'); nltk.download('averaged_perceptron_tagger', download_dir='/usr/share/nltk_data')" && \
+    chmod -R 755 /usr/share/nltk_data
 
 # Copy application files
 COPY app.py .
